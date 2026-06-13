@@ -100,4 +100,8 @@ def free_cuda() -> None:
 def is_cuda_oom(exc: BaseException) -> bool:
     """Heuristic: does this exception look like a CUDA out-of-memory error?"""
     msg = str(exc).lower()
-    return "out of memory" in msg or "cuda oom" in msg or "alloc" in msg and "cuda" in msg
+    return (
+        "out of memory" in msg
+        or "cuda oom" in msg
+        or ("alloc" in msg and "cuda" in msg)
+    )

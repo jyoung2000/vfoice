@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from inflect.document.spans import EMOTIONS, Inflection
+from inflect.models.engine_base import EngineOOMError, is_cuda_oom
 from inflect.models.engine_chatterbox import derive_chatterbox_params
 from inflect.models.engine_indextts2 import map_inflection
 
@@ -82,3 +83,24 @@ def test_indextts2_neutral():
     assert kw["emo_vector"] is None
     assert kw["emo_audio_prompt"] is None
     assert kw["use_emo_text"] is False
+
+
+# --------------------------------------------------------------------------
+# is_cuda_oom precedence (regression: 'alloc'/'cuda' must be grouped)
+# --------------------------------------------------------------------------
+def test_is_cuda_oom_detects_variants():
+    assert is_cuda_oom(RuntimeError("CUDA error: out of memory"))
+    assert is_cuda_oom(RuntimeError("cuda oom while allocating"))
+    assert is_cuda_oom(RuntimeError("failed to allocate 2GB on device cuda:0"))
+
+
+def test_is_cuda_oom_ignores_unrelated():
+    assert not is_cuda_oom(ValueError("bad shape"))
+    # 'alloc' alone (no 'cuda') must NOT trip the grouped clause
+    assert not is_cuda_oom(RuntimeError("could not allocate host buffer"))
+
+
+def test_engine_oom_is_engine_error_subclass():
+    from inflect.models.engine_base import EngineError
+
+    assert issubclass(EngineOOMError, EngineError)

@@ -171,7 +171,7 @@ class MainWindow(QMainWindow):
         self.profile_combo.currentIndexChanged.connect(self._on_combo_selected)
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
 
-        self.synth_action.triggered.connect(self.synthesize_all)
+        self.synth_action.triggered.connect(lambda: self.synthesize_all())
         self.cancel_action.triggered.connect(self.cancel_synthesis)
         self.export_action.triggered.connect(self.export_audio)
         self.timeline.rerender_segment.connect(self._rerender_segment)
@@ -248,8 +248,14 @@ class MainWindow(QMainWindow):
             engine=self._project.engine, engine_params={},
         )
 
-    def synthesize_all(self) -> None:
-        if self._synth_thread is not None:
+    def _is_busy(self) -> bool:
+        """A synth or preview render is in flight. The engines are single-resident
+        on one shared ModelManager, so the two must never run concurrently."""
+        return self._synth_thread is not None or self._preview_thread is not None
+
+    def synthesize_all(self, force_seg_ids: set[int] | None = None) -> None:
+        if self._is_busy():
+            self.statusBar().showMessage("Busy rendering — please wait.", 3000)
             return
         doc = self.editor.model()
         if not doc.text.strip():
@@ -265,7 +271,7 @@ class MainWindow(QMainWindow):
 
         self._set_synth_running(True)
         self._synth_thread = QThread(self)
-        self._synth_worker = SynthWorker(self._pipeline, jobs)
+        self._synth_worker = SynthWorker(self._pipeline, jobs, force_seg_ids=force_seg_ids)
         self._synth_worker.moveToThread(self._synth_thread)
         self._synth_thread.started.connect(self._synth_worker.run)
         self._synth_worker.progress.connect(self._on_synth_progress)
@@ -331,11 +337,12 @@ class MainWindow(QMainWindow):
         return markers
 
     def _rerender_segment(self, seg_id: int) -> None:
-        jobs = self._build_jobs()
-        job = next((j for j in jobs if j.seg_id == seg_id), None)
-        if job:
-            self._pipeline.invalidate(job.hash)
-            self.synthesize_all()
+        if self._is_busy():
+            self.statusBar().showMessage("Busy rendering — please wait.", 3000)
+            return
+        # Force just this segment (covers both hybrid stages, which share the id);
+        # everything else is served from cache.
+        self.synthesize_all(force_seg_ids={seg_id})
 
     # ----- preview ----------------------------------------------------------
     def _selection_text(self) -> str:
@@ -375,7 +382,8 @@ class MainWindow(QMainWindow):
         self._run_preview_job(stage1)
 
     def _run_preview_job(self, job: SegmentJob) -> None:
-        if self._preview_thread is not None:
+        if self._is_busy():
+            self.statusBar().showMessage("Busy rendering — please wait.", 3000)
             return
         self.statusBar().showMessage("Rendering preview…")
         self._preview_thread = QThread(self)
@@ -393,7 +401,9 @@ class MainWindow(QMainWindow):
         from ..audio.playback import AudioPlayer
 
         self.statusBar().showMessage("Preview ready.", 3000)
-        self._preview_player = AudioPlayer(self._cfg.settings.output_device)
+        if self._preview_player is None:
+            self._preview_player = AudioPlayer(self._cfg.settings.output_device)
+        self._preview_player.stop()  # don't leak/cut the previous stream
         self._preview_player.play(np.asarray(audio, dtype=np.float32), sr)
 
     def _on_preview_failed(self, message: str) -> None:
@@ -517,10 +527,17 @@ class MainWindow(QMainWindow):
             8000)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt signature
+        # Stop playback and let any in-flight worker thread finish before we
+        # unload engines — otherwise Qt aborts ("thread still running") or two
+        # threads touch the single-resident ModelManager at once.
+        self.timeline.stop()
+        if self._preview_player:
+            self._preview_player.stop()
         if self._synth_worker:
             self._synth_worker.cancel()
-        if self._synth_thread and self._synth_thread.isRunning():
-            self._synth_thread.quit()
-            self._synth_thread.wait(3000)
+        for thread in (self._synth_thread, self._preview_thread):
+            if thread and thread.isRunning():
+                thread.quit()
+                thread.wait(15000)  # generous: a model load/segment may be mid-flight
         self._manager.unload_all()
         super().closeEvent(event)

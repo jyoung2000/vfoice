@@ -64,6 +64,8 @@ class InflectionTextEdit(QTextEdit):
     def _on_contents_change(self, position: int, removed: int, added: int) -> None:
         if self._syncing:
             return
+        # Order matters: sync the post-edit text first so remap_on_edit clamps
+        # new offsets against the *current* length.
         self._doc.text = self.toPlainText()
         self._doc.remap_on_edit(position, removed, added)
         self._refresh_underlines()
@@ -80,7 +82,9 @@ class InflectionTextEdit(QTextEdit):
     def current_inflection(self) -> Inflection:
         start, end = self.selected_range()
         pos = start if start != end else self.textCursor().position()
-        return self._doc.inflection_at(min(pos, max(0, len(self._doc.text) - 1)))
+        # inflection_at/span_at safely return the document default for any
+        # out-of-span position, including the end of the document.
+        return self._doc.inflection_at(pos)
 
     def current_span(self) -> InflectionSpan | None:
         start, _ = self.selected_range()

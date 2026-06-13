@@ -41,12 +41,18 @@ class SegmentLayout:
 @dataclass
 class _RenderUnit:
     """One render task. ``kind`` is 'final' (its audio is the segment) or
-    'perf' (a hybrid stage-1 performance written to ``perf_path``)."""
+    'perf' (a hybrid stage-1 performance written to ``perf_path``).
+
+    ``out_index`` is the position in the original ``jobs`` list this unit's
+    audio belongs to (final units only); ``seg_id`` is the document segment id
+    used for force/re-render targeting.
+    """
 
     engine: str
     kind: str
     job: SegmentJob
     seg_id: int
+    out_index: int
     perf_path: Path | None = None
 
 
@@ -112,13 +118,13 @@ class SynthesisPipeline:
     def _plan_units(self, jobs: list[SegmentJob]) -> list[_RenderUnit]:
         """Expand hybrid jobs into (Fish perf + IndexTTS-2 final) unit pairs."""
         units: list[_RenderUnit] = []
-        for job in jobs:
+        for idx, job in enumerate(jobs):
             if job.engine == "hybrid":
                 stage1, stage2, perf_path = self._make_hybrid_stages(job)
-                units.append(_RenderUnit("fish", "perf", stage1, job.seg_id, perf_path))
-                units.append(_RenderUnit("indextts2", "final", stage2, job.seg_id))
+                units.append(_RenderUnit("fish", "perf", stage1, job.seg_id, idx, perf_path))
+                units.append(_RenderUnit("indextts2", "final", stage2, job.seg_id, idx))
             else:
-                units.append(_RenderUnit(job.engine, "final", job, job.seg_id))
+                units.append(_RenderUnit(job.engine, "final", job, job.seg_id, idx))
         return units
 
     def _make_hybrid_stages(self, job: SegmentJob) -> tuple[SegmentJob, SegmentJob, Path]:
@@ -166,7 +172,7 @@ class SynthesisPipeline:
         jobs: list[SegmentJob],
         progress_cb: ProgressCb | None = None,
         should_cancel: CancelCb | None = None,
-        force_hashes: set[str] | None = None,
+        force_seg_ids: set[int] | None = None,
     ) -> tuple[np.ndarray, int]:
         """Render all jobs and return ``(mix, sample_rate)``.
 
@@ -174,30 +180,36 @@ class SynthesisPipeline:
         IndexTTS-2 stage-2 render that uses it as the emotion reference. Units
         are rendered grouped by engine (Fish → IndexTTS-2 → Chatterbox) so model
         swaps stay minimal (≤ 2 for a typical mixed document).
+
+        ``force_seg_ids`` forces a re-render (ignoring the cache) of those
+        document segments — covering *both* hybrid stages, since they share the
+        segment's id.
         """
         if not jobs:
             return np.zeros(0, dtype=np.float32), 24000
 
-        force_hashes = force_hashes or set()
+        force_seg_ids = force_seg_ids or set()
         units = self._plan_units(jobs)
         # Stable sort by engine rank keeps document order within an engine.
         units.sort(key=lambda u: _engine_rank(u.engine))
 
+        # Keyed by out_index (position in `jobs`) — guaranteed unique and, unlike
+        # the job hash, preserves per-segment pauses (hash excludes pause).
         rendered: dict[int, RenderedSegment] = {}
         total = len(units)
         for done, unit in enumerate(units, start=1):
             if should_cancel and should_cancel():
                 self.manager.unload_all()
                 raise CancelledError()
+            force = unit.seg_id in force_seg_ids
             if unit.kind == "perf":
-                self._render_perf(unit.job, unit.perf_path, force=unit.job.hash in force_hashes)
+                self._render_perf(unit.job, unit.perf_path, force=force)
             else:
-                rendered[unit.seg_id] = self._render_job(
-                    unit.job, force=unit.job.hash in force_hashes)
+                rendered[unit.out_index] = self._render_job(unit.job, force=force)
             if progress_cb:
                 progress_cb(done, total, f"Rendering segment {done}/{total}")
 
-        ordered = [rendered[job.seg_id] for job in jobs]
+        ordered = [rendered[i] for i in range(len(jobs))]
         target_sr = max((s.sr for s in ordered if s.audio.size), default=24000)
         self.last_layout = self._compute_layout(jobs, ordered, target_sr)
         if progress_cb:
@@ -232,10 +244,3 @@ class SynthesisPipeline:
             ))
             pos = max(0, end - n_fade)  # next block overlaps by the crossfade
         return layout
-
-    def render_one(self, job: SegmentJob, force: bool = True) -> tuple[np.ndarray, int]:
-        """Render a single segment (for per-segment preview / re-render)."""
-        if force:
-            self.invalidate(job.hash)
-        seg = self._render_job(job, force=force)
-        return seg.audio, seg.sr

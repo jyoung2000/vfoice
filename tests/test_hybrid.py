@@ -147,3 +147,32 @@ def test_hybrid_caches_perf(tmp_path):
     pipeline.render([job])
     fish_calls_second = len([c for c in synth_log if c[0] == "fish"])
     assert fish_calls_second == fish_calls_first
+
+
+def test_force_seg_id_rerenders_both_hybrid_stages(tmp_path):
+    pipeline, _, synth_log = _make_pipeline(tmp_path)
+    profile = SimpleNamespace(id="p1", reference_path=str(tmp_path / "ref.wav"))
+    job = SegmentJob(0, "Re-render me.", Inflection(emo_text="sad"), profile, "hybrid")
+
+    pipeline.render([job])
+    fish_first = len([c for c in synth_log if c[0] == "fish"])
+    # forcing the segment must re-run the Fish performance (stage 1), not just stage 2
+    pipeline.render([job], force_seg_ids={0})
+    fish_second = len([c for c in synth_log if c[0] == "fish"])
+    assert fish_second == fish_first + 1
+
+
+def test_identical_hash_segments_keep_distinct_pauses(tmp_path):
+    """Two segments with identical audio-hash but different pauses must both
+    keep their pause — proves the mix is keyed by position, not by hash."""
+    pipeline, _, _ = _make_pipeline(tmp_path)
+    profile = SimpleNamespace(id="p1", reference_path=str(tmp_path / "ref.wav"))
+    # chatterbox fake outputs sr//5 = 4800 samples @ 24000 = 0.2 s
+    a = SegmentJob(0, "hi", Inflection(pause_after_ms=0), profile, "chatterbox")
+    b = SegmentJob(1, "hi", Inflection(pause_after_ms=500), profile, "chatterbox")
+    assert a.hash == b.hash  # hash excludes pause -> they collide by hash
+
+    mix, sr = pipeline.render([a, b])
+    n_fade = int(0.015 * sr)
+    expected = 4800 + (4800 + int(0.5 * sr)) - n_fade  # both pauses present
+    assert abs(mix.size - expected) <= 1

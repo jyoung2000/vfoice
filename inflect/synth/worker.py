@@ -27,12 +27,12 @@ class SynthWorker(QObject):
         self,
         pipeline: SynthesisPipeline,
         jobs: list[SegmentJob],
-        force_hashes: set[str] | None = None,
+        force_seg_ids: set[int] | None = None,
     ) -> None:
         super().__init__()
         self._pipeline = pipeline
         self._jobs = jobs
-        self._force = force_hashes or set()
+        self._force = force_seg_ids or set()
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
@@ -55,7 +55,7 @@ class SynthWorker(QObject):
                 self._jobs,
                 progress_cb=lambda d, t, m: self.progress.emit(d, t, m),
                 should_cancel=self._cancel.is_set,
-                force_hashes=self._force,
+                force_seg_ids=self._force,
             )
             self.finished.emit(mix, sr)
         except CancelledError:
@@ -88,8 +88,8 @@ class PreviewWorker(QObject):
             for name in engines:
                 if not self._pipeline.manager.is_downloaded(name):
                     self._pipeline.manager.ensure_downloaded(name)
-            force = {self._job.hash} if self._force else None
-            mix, sr = self._pipeline.render([self._job], force_hashes=force)
+            force = {self._job.seg_id} if self._force else None
+            mix, sr = self._pipeline.render([self._job], force_seg_ids=force)
             self.finished.emit(mix, sr)
         except Exception as exc:
             log.exception("preview failed")
