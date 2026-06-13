@@ -1,0 +1,42 @@
+# Inflect Studio — Python 3.10–3.11
+#
+# GPU note: install a CUDA build of torch FIRST, matching your driver, e.g.
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+# then `pip install -r requirements.txt`. The torch lines below are a CPU
+# fallback; they are intentionally unpinned so your CUDA wheels win.
+
+# --- GUI ---
+PySide6>=6.6,<6.9
+pyqtgraph>=0.13
+
+# --- Core audio / DSP ---
+numpy>=1.24,<3
+soundfile>=0.12
+pyloudnorm>=0.1.1
+librosa>=0.10
+sounddevice>=0.4.6
+
+# --- ML / TTS runtime ---
+torch>=2.1            # install the CUDA build separately (see note above)
+torchaudio>=2.1
+huggingface_hub>=0.23
+
+# --- Primary engine: IndexTTS-2 ---
+# Not reliably on PyPI; installed from GitHub. Pinning to the repo keeps the
+# real inference API. If a PyPI 'indextts' release exists for your platform you
+# may use it instead.
+indextts @ git+https://github.com/index-tts/index-tts.git
+
+# --- Fast preview engine: Chatterbox ---
+chatterbox-tts>=0.1
+
+# --- Vocal isolation (optional, toggleable) ---
+demucs>=4.0
+
+# --- Speech activity detection ---
+silero-vad>=5.1
+
+# --- Phase 6 (optional): Fish Speech / S2 ---
+# Install manually when enabling the Fish engine — heavy and research-licensed:
+#   pip install fish-speech
+# (or follow https://github.com/fishaudio/fish-speech for the current package)

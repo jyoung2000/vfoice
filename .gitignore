@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+.venv-test/
+venv/
+env/
+
+# Inflect Studio runtime data (models, voices, cache, logs)
+models/
+voices/
+project_cache/
+logs/
+*.inflect
+!tests/**/*.inflect
+
+# Audio scratch
+*.wav
+*.mp3
+!tests/fixtures/*.wav
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inflect-studio"
+version = "0.1.0"
+description = "Local desktop voice cloning + inflection-editor TTS studio"
+readme = "README.md"
+requires-python = ">=3.10,<3.12"
+license = { text = "MIT" }
+
+# Runtime deps live in requirements.txt (GPU wheels need manual ordering).
+# This list keeps the pure-logic core installable for development/testing.
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "soundfile>=0.12", "pyloudnorm>=0.1.1"]
+
+[project.scripts]
+inflect-studio = "inflect.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["inflect*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
