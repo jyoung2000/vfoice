@@ -104,7 +104,9 @@ class ChatterboxEngine(TTSEngine):
 
 
 def _to_numpy(wav) -> np.ndarray:
-    """Coerce a torch tensor or array to a 1-D numpy float array."""
+    """Coerce a torch tensor / array / (sr, wav) tuple to a 1-D numpy float array."""
+    if isinstance(wav, tuple):  # some versions return (sample_rate, audio)
+        wav = wav[-1]
     if hasattr(wav, "detach"):
         wav = wav.detach().cpu().numpy()
     return np.asarray(wav, dtype=np.float32).reshape(-1)
