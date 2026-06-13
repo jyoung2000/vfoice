@@ -45,6 +45,8 @@ class SegmentJob:
     engine: str
     engine_params: dict[str, Any] = field(default_factory=dict)
     hash: str = ""
+    char_start: int = 0  # source offset in the document (not part of the hash)
+    char_end: int = 0
 
     def __post_init__(self) -> None:
         if not self.hash:
@@ -159,12 +161,14 @@ def segment_document(
         run_text = doc.text[a:b]
         pieces = _pack_run(run_text)
 
+        offset = a
         for i, piece in enumerate(pieces):
             is_last = i == len(pieces) - 1
             # Only the final piece of a run keeps the trailing pause so we
             # never insert pauses inside a single delivery run.
             piece_infl = inflection if is_last else replace(inflection, pause_after_ms=0)
             if piece.strip() == "" and piece_infl.pause_after_ms == 0:
+                offset += len(piece)
                 continue  # drop empty whitespace gaps with no pause
             jobs.append(
                 SegmentJob(
@@ -174,8 +178,11 @@ def segment_document(
                     voice_profile=voice_profile,
                     engine=seg_engine,
                     engine_params=dict(engine_params),
+                    char_start=offset,
+                    char_end=offset + len(piece),
                 )
             )
+            offset += len(piece)
             seg_id += 1
 
     return jobs

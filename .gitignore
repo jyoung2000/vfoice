@@ -12,11 +12,13 @@ dist/
 venv/
 env/
 
-# Inflect Studio runtime data (models, voices, cache, logs)
-models/
-voices/
-project_cache/
-logs/
+# Inflect Studio runtime data — anchored to repo root so the source package
+# inflect/models/ is NOT ignored.
+/models/
+/voices/
+/project_cache/
+/logs/
+/tmp/
 *.inflect
 !tests/**/*.inflect
 

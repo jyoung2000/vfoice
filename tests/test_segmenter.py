@@ -98,6 +98,17 @@ def test_hard_wrap_oversized_single_sentence():
     assert "".join(j.text for j in jobs) == text
 
 
+def test_char_ranges_map_back_to_text():
+    doc = Document(text="Hello world goodbye")
+    doc.apply_inflection(6, 11, Inflection(emo_text="angry"))  # "world"
+    jobs = segment_document(doc)
+    for j in jobs:
+        assert doc.text[j.char_start:j.char_end] == j.text
+    # the styled segment maps exactly onto the span range
+    world = next(j for j in jobs if j.text == "world")
+    assert (world.char_start, world.char_end) == (6, 11)
+
+
 def test_per_span_engine_override():
     doc = Document(text="alpha beta")
     doc.apply_inflection(0, 5, Inflection(engine="fish"))

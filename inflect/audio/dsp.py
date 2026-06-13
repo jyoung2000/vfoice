@@ -107,6 +107,21 @@ def time_stretch(audio: np.ndarray, rate: float) -> np.ndarray:
         return np.interp(idx, np.arange(audio.shape[0]), audio).astype(np.float32)
 
 
+def peak_envelope(audio: np.ndarray, n_buckets: int = 2000) -> tuple[np.ndarray, np.ndarray]:
+    """Down-sample to a min/max envelope for waveform display.
+
+    Returns ``(mins, maxs)`` of length ``<= n_buckets``.
+    """
+    a = to_mono_float32(audio)
+    if a.size == 0:
+        return np.zeros(0, dtype=np.float32), np.zeros(0, dtype=np.float32)
+    if a.size <= n_buckets:
+        return a.copy(), a.copy()
+    bucket = a.size // n_buckets
+    trimmed = a[: bucket * n_buckets].reshape(n_buckets, bucket)
+    return trimmed.min(axis=1).astype(np.float32), trimmed.max(axis=1).astype(np.float32)
+
+
 def spectral_flatness(audio: np.ndarray, sr: int) -> float:
     """Mean spectral flatness in [0, 1]; high values suggest noise/music."""
     a = to_mono_float32(audio)
