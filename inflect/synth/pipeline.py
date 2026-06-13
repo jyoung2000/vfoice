@@ -9,7 +9,7 @@ editing one phrase only re-renders that one segment.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -38,17 +38,29 @@ class SegmentLayout:
     job_hash: str
 
 
+@dataclass
+class _RenderUnit:
+    """One render task. ``kind`` is 'final' (its audio is the segment) or
+    'perf' (a hybrid stage-1 performance written to ``perf_path``)."""
+
+    engine: str
+    kind: str
+    job: SegmentJob
+    seg_id: int
+    perf_path: Path | None = None
+
+
 class CancelledError(RuntimeError):
     """Raised when synthesis is cancelled between segments."""
 
 
-def _ordered_engines(jobs: list[SegmentJob]) -> list[str]:
-    """Unique engine names in first-appearance order."""
-    seen: list[str] = []
-    for job in jobs:
-        if job.engine not in seen:
-            seen.append(job.engine)
-    return seen
+# Render engines in this order so model swaps are minimized and, crucially,
+# Fish (hybrid stage 1) always runs before IndexTTS-2 (hybrid stage 2).
+_ENGINE_ORDER = ["fish", "indextts2", "chatterbox"]
+
+
+def _engine_rank(name: str) -> int:
+    return _ENGINE_ORDER.index(name) if name in _ENGINE_ORDER else len(_ENGINE_ORDER)
 
 
 class SynthesisPipeline:
@@ -97,6 +109,54 @@ class SynthesisPipeline:
             sf.write(str(path), audio, sr)
         return RenderedSegment(audio, sr, job.inflection.pause_after_ms)
 
+    def _plan_units(self, jobs: list[SegmentJob]) -> list[_RenderUnit]:
+        """Expand hybrid jobs into (Fish perf + IndexTTS-2 final) unit pairs."""
+        units: list[_RenderUnit] = []
+        for job in jobs:
+            if job.engine == "hybrid":
+                stage1, stage2, perf_path = self._make_hybrid_stages(job)
+                units.append(_RenderUnit("fish", "perf", stage1, job.seg_id, perf_path))
+                units.append(_RenderUnit("indextts2", "final", stage2, job.seg_id))
+            else:
+                units.append(_RenderUnit(job.engine, "final", job, job.seg_id))
+        return units
+
+    def _make_hybrid_stages(self, job: SegmentJob) -> tuple[SegmentJob, SegmentJob, Path]:
+        """Build the Fish performance job and the IndexTTS-2 timbre job."""
+        stage1 = SegmentJob(
+            seg_id=job.seg_id, text=job.text, inflection=job.inflection,
+            voice_profile=None, engine="fish",
+            engine_params={**job.engine_params, "role": "perf"},
+        )
+        perf_path = self.cache_dir / f"perf_{stage1.hash}.wav"
+        # Stage 2: clone the user's timbre, drive emotion from the performance wav.
+        stage2_infl = replace(
+            job.inflection, emo_audio=str(perf_path), emo_text=None, emotion_vector=None)
+        stage2 = SegmentJob(
+            seg_id=job.seg_id, text=job.text, inflection=stage2_infl,
+            voice_profile=job.voice_profile, engine="indextts2",
+            engine_params=job.engine_params,
+            char_start=job.char_start, char_end=job.char_end,
+        )
+        return stage1, stage2, perf_path
+
+    def _render_perf(self, job: SegmentJob, perf_path: Path, force: bool) -> None:
+        """Render a hybrid stage-1 performance to ``perf_path`` (cached)."""
+        import soundfile as sf
+
+        if perf_path.exists() and not force:
+            return
+        engine = self.manager.get_engine(job.engine)
+        audio = engine.synthesize(job)
+        if audio.size:
+            sf.write(str(perf_path), audio, engine.sample_rate)
+        log.info("hybrid perf rendered seg %d -> %s", job.seg_id, perf_path.name)
+
+    def perf_path_for(self, job: SegmentJob) -> Path:
+        """Public: the stage-1 performance wav path for a hybrid ``job`` (for audition)."""
+        stage1, _, perf_path = self._make_hybrid_stages(job)
+        return perf_path
+
     def _engine_sr(self, engine_name: str) -> int:
         eng = self.manager._engines.get(engine_name)
         return eng.sample_rate if eng and eng.is_loaded else 24000
@@ -108,30 +168,34 @@ class SynthesisPipeline:
         should_cancel: CancelCb | None = None,
         force_hashes: set[str] | None = None,
     ) -> tuple[np.ndarray, int]:
-        """Render all jobs and return ``(mix, sample_rate)``."""
+        """Render all jobs and return ``(mix, sample_rate)``.
+
+        Hybrid jobs expand into a Fish stage-1 'performance' render and an
+        IndexTTS-2 stage-2 render that uses it as the emotion reference. Units
+        are rendered grouped by engine (Fish → IndexTTS-2 → Chatterbox) so model
+        swaps stay minimal (≤ 2 for a typical mixed document).
+        """
         if not jobs:
             return np.zeros(0, dtype=np.float32), 24000
 
         force_hashes = force_hashes or set()
+        units = self._plan_units(jobs)
+        # Stable sort by engine rank keeps document order within an engine.
+        units.sort(key=lambda u: _engine_rank(u.engine))
+
         rendered: dict[int, RenderedSegment] = {}
-        total = len(jobs)
-        done = 0
-
-        # Group by engine; render one engine's whole batch before swapping.
-        by_engine: dict[str, list[SegmentJob]] = {}
-        for job in jobs:
-            by_engine.setdefault(job.engine, []).append(job)
-
-        for engine_name in _ordered_engines(jobs):
-            for job in by_engine[engine_name]:
-                if should_cancel and should_cancel():
-                    self.manager.unload_all()
-                    raise CancelledError()
-                seg = self._render_job(job, force=job.hash in force_hashes)
-                rendered[job.seg_id] = seg
-                done += 1
-                if progress_cb:
-                    progress_cb(done, total, f"Rendering segment {done}/{total}")
+        total = len(units)
+        for done, unit in enumerate(units, start=1):
+            if should_cancel and should_cancel():
+                self.manager.unload_all()
+                raise CancelledError()
+            if unit.kind == "perf":
+                self._render_perf(unit.job, unit.perf_path, force=unit.job.hash in force_hashes)
+            else:
+                rendered[unit.seg_id] = self._render_job(
+                    unit.job, force=unit.job.hash in force_hashes)
+            if progress_cb:
+                progress_cb(done, total, f"Rendering segment {done}/{total}")
 
         ordered = [rendered[job.seg_id] for job in jobs]
         target_sr = max((s.sr for s in ordered if s.audio.size), default=24000)

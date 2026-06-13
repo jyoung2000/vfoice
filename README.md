@@ -150,7 +150,21 @@ available, offscreen GUI smoke tests also run; otherwise they skip.
 3. **Chatterbox path** ✅ — engine, worker, assembly, timeline, export, GUI.
 4. **IndexTTS-2** ✅ — emotion vector / emo-text / alpha / speed, fp16, swap.
 5. **Polish** ✅ — per-segment re-render, tooltips, dark theme, settings, README.
-6. **Fish S2 hybrid** (optional) — performance-transfer mode.
+6. **Fish S2 hybrid** ✅ (optional) — performance-transfer mode.
+
+## Hybrid "performance transfer" (Phase 6)
+
+In the Inspector, set a span's **Engine** to *Hybrid*. On synthesis the span is
+rendered twice: **Fish** performs it expressively (driven by tag-translated
+emotion) in its own voice, then **IndexTTS-2** re-renders your text in the
+cloned voice using Fish's take as the *emotion reference*. The result carries
+Fish's expressiveness in your speaker's timbre. Use *Audition performance* to
+hear the Fish stage before committing. Jobs are batched by engine
+(Fish → IndexTTS-2 → Chatterbox) so a mixed document needs at most ~2–3 model
+swaps, and both stages are cached by hash.
+
+Fish S2 is **research/personal-use licensed** and VRAM-hungry (24 GB is
+recommended for S2); enable it in Settings and expect slow first tokens.
 
 ## License
 

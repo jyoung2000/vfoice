@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
         self.inspector.apply_to_selection.connect(self._apply_inflection)
         self.inspector.set_as_default.connect(self._set_default_inflection)
         self.inspector.preview_requested.connect(self._preview_segment)
+        self.inspector.audition_performance.connect(self._audition_performance)
 
         self.library.profile_selected.connect(self._on_library_selected)
         self.profile_combo.currentIndexChanged.connect(self._on_combo_selected)
@@ -337,20 +338,45 @@ class MainWindow(QMainWindow):
             self.synthesize_all()
 
     # ----- preview ----------------------------------------------------------
+    def _selection_text(self) -> str:
+        start, end = self.editor.selected_range()
+        doc_text = self.editor.model().text
+        text = doc_text[start:end] if end > start else doc_text
+        return text[:600]
+
     def _preview_segment(self, inflection) -> None:
-        if self._preview_thread is not None:
-            return
         if self._current_profile() is None:
             QMessageBox.warning(self, "No voice selected", "Choose a voice profile first.")
             return
-        start, end = self.editor.selected_range()
-        text = self.editor.model().text[start:end] if end > start else self.editor.model().text
+        text = self._selection_text()
         if not text.strip():
             return
-        job = SegmentJob(
-            seg_id=-1, text=text[:600], inflection=inflection.normalized(),
-            voice_profile=self._current_profile(), engine=self._project.engine,
-        )
+        engine = inflection.engine or self._project.engine
+        if engine == "hybrid":
+            # Preview of a hybrid span = the finished transfer; render via pipeline.
+            self._run_preview_job(SegmentJob(
+                seg_id=-1, text=text, inflection=inflection.normalized(),
+                voice_profile=self._current_profile(), engine="hybrid"))
+            return
+        self._run_preview_job(SegmentJob(
+            seg_id=-1, text=text, inflection=inflection.normalized(),
+            voice_profile=self._current_profile(), engine=engine))
+
+    def _audition_performance(self, inflection) -> None:
+        """Render just the Fish stage-1 performance for a hybrid span."""
+        text = self._selection_text()
+        if not text.strip():
+            return
+        hybrid_job = SegmentJob(
+            seg_id=-1, text=text, inflection=inflection.normalized(),
+            voice_profile=self._current_profile(), engine="hybrid")
+        stage1, _, _ = self._pipeline._make_hybrid_stages(hybrid_job)
+        self.statusBar().showMessage("Rendering performance (Fish)…")
+        self._run_preview_job(stage1)
+
+    def _run_preview_job(self, job: SegmentJob) -> None:
+        if self._preview_thread is not None:
+            return
         self.statusBar().showMessage("Rendering preview…")
         self._preview_thread = QThread(self)
         self._preview_worker = PreviewWorker(self._pipeline, job)

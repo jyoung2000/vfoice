@@ -10,6 +10,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
+    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -24,6 +25,15 @@ from PySide6.QtWidgets import (
 
 from ..document.spans import EMOTIONS, Inflection
 from .editor import span_color
+
+# Per-span engine choices: (label, Inflection.engine value).
+ENGINE_CHOICES: list[tuple[str, object]] = [
+    ("Document default", None),
+    ("Chatterbox (Draft)", "chatterbox"),
+    ("IndexTTS-2 (Final)", "indextts2"),
+    ("Fish (Final)", "fish"),
+    ("Hybrid (performance transfer)", "hybrid"),
+]
 
 
 class EmotionBars(QWidget):
@@ -57,6 +67,7 @@ class InspectorPanel(QWidget):
     apply_to_selection = Signal(object)   # Inflection
     set_as_default = Signal(object)       # Inflection
     preview_requested = Signal(object)    # Inflection
+    audition_performance = Signal(object)  # Inflection (hybrid stage-1)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -138,6 +149,23 @@ class InspectorPanel(QWidget):
         timing_form.addRow("Pause after:", self._pause)
         layout.addWidget(timing_box)
 
+        # Engine (per-span override)
+        engine_box = QGroupBox("Engine")
+        engine_form = QFormLayout(engine_box)
+        self._engine = QComboBox()
+        for label, _ in ENGINE_CHOICES:
+            self._engine.addItem(label)
+        self._engine.currentIndexChanged.connect(self._on_engine_changed)
+        engine_form.addRow("For this span:", self._engine)
+        self._audition_btn = QPushButton("Audition performance (stage 1)")
+        self._audition_btn.setToolTip("Render just the Fish performance before "
+                                      "transferring it to your cloned voice.")
+        self._audition_btn.setVisible(False)
+        self._audition_btn.clicked.connect(
+            lambda: self.audition_performance.emit(self.build_inflection()))
+        engine_form.addRow(self._audition_btn)
+        layout.addWidget(engine_box)
+
         # Actions
         self._apply_btn = QPushButton("Apply to selection")
         self._default_btn = QPushButton("Set as document default")
@@ -161,6 +189,7 @@ class InspectorPanel(QWidget):
             emo_alpha=self._alpha.value() / 100.0,
             speed=self._speed.value() / 100.0,
             pause_after_ms=self._pause.value(),
+            engine=ENGINE_CHOICES[self._engine.currentIndex()][1],
         )
 
     def set_inflection(self, infl: Inflection, has_selection: bool) -> None:
@@ -175,12 +204,19 @@ class InspectorPanel(QWidget):
         self._speed.setValue(int(round(infl.speed * 100)))
         self._speed_lbl.setText(f"{infl.speed:.2f}×")
         self._pause.setValue(infl.pause_after_ms)
+        engine_idx = next((i for i, (_, val) in enumerate(ENGINE_CHOICES)
+                           if val == infl.engine), 0)
+        self._engine.setCurrentIndex(engine_idx)
+        self._audition_btn.setVisible(infl.engine == "hybrid")
         self._bars.set_values(vec)
         self._scope.setText(
             "Editing selection" if has_selection else "No selection — editing document default"
         )
         self._apply_btn.setEnabled(has_selection)
         self._updating = False
+
+    def _on_engine_changed(self, index: int) -> None:
+        self._audition_btn.setVisible(ENGINE_CHOICES[index][1] == "hybrid")
 
     def _on_changed(self) -> None:
         if self._updating:

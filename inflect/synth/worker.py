@@ -67,7 +67,11 @@ class SynthWorker(QObject):
 
 
 class PreviewWorker(QObject):
-    """Render a single segment (Inspector 'Preview this segment')."""
+    """Render a single segment (Inspector 'Preview this segment' / audition).
+
+    Routes through the full pipeline so hybrid jobs (Fish → IndexTTS-2) work the
+    same as direct ones.
+    """
 
     finished = Signal(object, int)
     failed = Signal(str)
@@ -80,11 +84,13 @@ class PreviewWorker(QObject):
 
     def run(self) -> None:
         try:
-            name = self._job.engine
-            if not self._pipeline.manager.is_downloaded(name):
-                self._pipeline.manager.ensure_downloaded(name)
-            audio, sr = self._pipeline.render_one(self._job, force=self._force)
-            self.finished.emit(audio, sr)
+            engines = {"fish", "indextts2"} if self._job.engine == "hybrid" else {self._job.engine}
+            for name in engines:
+                if not self._pipeline.manager.is_downloaded(name):
+                    self._pipeline.manager.ensure_downloaded(name)
+            force = {self._job.hash} if self._force else None
+            mix, sr = self._pipeline.render([self._job], force_hashes=force)
+            self.finished.emit(mix, sr)
         except Exception as exc:
             log.exception("preview failed")
             self.failed.emit(str(exc))
