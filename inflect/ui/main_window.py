@@ -295,7 +295,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Rendered {self._mix.size / sr:.1f}s of audio.", 5000)
 
     def _on_synth_failed(self, message: str) -> None:
-        QMessageBox.critical(self, "Synthesis failed", message)
+        from .error_dialog import show_error
+
+        show_error(self, "Synthesis failed", message)
 
     def _on_synth_cancelled(self) -> None:
         self.statusBar().showMessage("Synthesis cancelled.", 4000)
@@ -369,7 +371,9 @@ class MainWindow(QMainWindow):
         self._preview_player.play(np.asarray(audio, dtype=np.float32), sr)
 
     def _on_preview_failed(self, message: str) -> None:
-        QMessageBox.critical(self, "Preview failed", message)
+        from .error_dialog import show_error
+
+        show_error(self, "Preview failed", message)
 
     def _cleanup_preview_thread(self) -> None:
         self._preview_worker = None

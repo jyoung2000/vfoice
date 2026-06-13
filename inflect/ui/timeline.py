@@ -146,17 +146,39 @@ class TimelinePanel(QWidget):
         self._time_lbl.setText(f"{t:.2f} / {dur:.2f} s")
 
     def _on_click(self, event) -> None:
-        if event.button() != Qt.LeftButton:
-            return
         pos = event.scenePos()
         vb = self._plot.getPlotItem().vb
         if not self._plot.sceneBoundingRect().contains(pos):
             return
         x = vb.mapSceneToView(pos).x()
         x = max(0.0, min(x, self._audio.size / self._sr if self._sr else 0.0))
+        if event.button() == Qt.RightButton:
+            self._show_segment_menu(x, event.screenPos())
+            return
+        if event.button() != Qt.LeftButton:
+            return
         self._playhead.setValue(x)
         self._player.seek_time(x)
         self.seek_changed.emit(x)
+
+    def _segment_at(self, t: float) -> SegmentMarker | None:
+        for m in self._markers:
+            if m.start_s <= t <= m.end_s:
+                return m
+        return None
+
+    def _show_segment_menu(self, t: float, screen_pos) -> None:
+        from PySide6.QtCore import QPoint
+        from PySide6.QtWidgets import QMenu
+
+        marker = self._segment_at(t)
+        if marker is None:
+            return
+        menu = QMenu(self)
+        act = menu.addAction(f"Re-render segment #{marker.seg_id}")
+        chosen = menu.exec(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+        if chosen == act:
+            self.rerender_segment.emit(marker.seg_id)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt signature
         if event.key() == Qt.Key_Space:
