@@ -130,6 +130,15 @@ class Config:
     def save_settings(self) -> None:
         self.settings.save(self.paths.settings_file)
 
+    def device(self) -> str:
+        """Preferred torch device: 'cuda' when available, else 'cpu'."""
+        try:
+            import torch
+
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            return "cpu"
+
 
 @lru_cache(maxsize=1)
 def get_config() -> Config:
